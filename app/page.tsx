@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { supabase } from "@/lib/supabaseClient";
 
 type Status = "outstanding" | "inprogress" | "complete";
 
@@ -9,6 +8,19 @@ interface Todo {
   id: number;
   text: string;
   status: Status;
+}
+
+const GQL_URL = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080"}`;
+
+async function gqlRequest<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
+  const res = await fetch(GQL_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, variables }),
+  });
+  const json = await res.json();
+  if (json.errors) throw new Error(json.errors[0].message);
+  return json.data;
 }
 
 const STATUS_CONFIG: Record<Status, { label: string; color: string; bg: string; border: string }> = {
@@ -27,14 +39,13 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
 
   const fetchTodos = useCallback(async () => {
-    const { data, error } = await supabase
-      .from("todos")
-      .select("*")
-      .order("created_at", { ascending: true });
-    if (error) {
+    try {
+      const data = await gqlRequest<{ todos: Todo[] }>(`
+        query { todos { id text status } }
+      `);
+      setTodos(data.todos);
+    } catch (error) {
       console.error("Error fetching todos:", error);
-    } else {
-      setTodos(data as Todo[]);
     }
     setLoading(false);
   }, []);
@@ -47,22 +58,23 @@ export default function Home() {
     const text = input.trim();
     if (!text) return;
     setInput("");
-    const { data, error } = await supabase
-      .from("todos")
-      .insert({ text, status: "outstanding" })
-      .select()
-      .single();
-    if (error) {
+    try {
+      const data = await gqlRequest<{ createTodo: Todo }>(`
+        mutation($text: String!) { createTodo(text: $text) { id text status } }
+      `, { text });
+      setTodos((prev) => [...prev, data.createTodo]);
+    } catch (error) {
       console.error("Error adding todo:", error);
-      return;
     }
-    setTodos((prev) => [...prev, data as Todo]);
   }
 
   async function deleteTodo(id: number) {
     setTodos((prev) => prev.filter((t) => t.id !== id));
-    const { error } = await supabase.from("todos").delete().eq("id", id);
-    if (error) {
+    try {
+      await gqlRequest(`
+        mutation($id: ID!) { deleteTodo(id: $id) }
+      `, { id: String(id) });
+    } catch (error) {
       console.error("Error deleting todo:", error);
       fetchTodos();
     }
@@ -70,8 +82,11 @@ export default function Home() {
 
   async function changeStatus(id: number, status: Status) {
     setTodos((prev) => prev.map((t) => (t.id === id ? { ...t, status } : t)));
-    const { error } = await supabase.from("todos").update({ status }).eq("id", id);
-    if (error) {
+    try {
+      await gqlRequest(`
+        mutation($id: ID!, $status: String) { updateTodo(id: $id, status: $status) { id text status } }
+      `, { id: String(id), status });
+    } catch (error) {
       console.error("Error updating status:", error);
       fetchTodos();
     }
@@ -88,8 +103,11 @@ export default function Home() {
     setTodos((prev) => prev.map((t) => (t.id === id ? { ...t, text } : t)));
     setEditingId(null);
     setEditText("");
-    const { error } = await supabase.from("todos").update({ text }).eq("id", id);
-    if (error) {
+    try {
+      await gqlRequest(`
+        mutation($id: ID!, $text: String) { updateTodo(id: $id, text: $text) { id text status } }
+      `, { id: String(id), text });
+    } catch (error) {
       console.error("Error updating todo:", error);
       fetchTodos();
     }
